@@ -5,6 +5,7 @@ import com.microsoft.azure.storage.StorageException;
 import com.microsoft.azure.storage.blob.BlobInputStream;
 import com.microsoft.azure.storage.blob.BlobRequestOptions;
 import com.microsoft.azure.storage.blob.CloudBlockBlob;
+import io.vavr.Tuple2;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -66,28 +67,27 @@ class ETagUsageTest extends BaseFunctionalTest {
     }
 
     /*
-FIRST RUN:
-
 INIT: 10
+INIT: 6
+INIT: 4
 INIT: 1
 INIT: 2
 INIT: 8
-INIT: 6
-INIT: 4
-METADATA UPDATED: 4
-METADATA UPDATED: 10
-METADATA UPDATED: 8
-INIT: 5
-INIT: 9
-METADATA UPDATED: 6
-INIT: 7
-METADATA UPDATED: 1
 METADATA UPDATED: 2
+METADATA UPDATED: 1
+METADATA UPDATED: 8
+METADATA UPDATED: 10
+METADATA UPDATED: 6
 INIT: 3
+INIT: 9
+INIT: 7
+METADATA UPDATED: 4
+INIT: 5
 METADATA UPDATED: 9
-METADATA UPDATED: 5
 METADATA UPDATED: 7
 METADATA UPDATED: 3
+METADATA UPDATED: 5
+FINISH METADATA: key=one; value=5
      */
     @Test
     void should_update_metadata() throws Exception {
@@ -101,14 +101,17 @@ METADATA UPDATED: 3
                     throw new RuntimeException(exception);
                 }
             })
-            .collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue));
+            .collect(Collectors.toMap(
+                AbstractMap.SimpleEntry::getKey,
+                entry -> new Tuple2<>(entry.getValue(), entry.getValue().getProperties().getEtag())
+            ));
 
         System.out.println("SIZE: " + blockBlobClients.size());
 
         assertThat(blockBlobClients
                        .values()
                        .stream()
-                       .map(CloudBlockBlob::hashCode)
+                       .map(tuple -> tuple._1.hashCode())
                        .collect(Collectors.toSet())
         ).hasSize(blockBlobClients.size());
 
@@ -118,18 +121,18 @@ METADATA UPDATED: 3
             .forEach(entry -> {
                 try {
                     System.out.println("INIT: " + entry.getKey());
-                    rejectedContainer.getBlockBlobReference(blobName);
-                    String originalETag = entry.getValue().getProperties().getEtag();
+                    CloudBlockBlob blockBlobClient = entry.getValue()._1;
+                    String originalETag = entry.getValue()._2;
                     var accessCondition = AccessCondition.generateIfMatchCondition(originalETag);
                     var requestOptions = new BlobRequestOptions();
                     requestOptions.setSkipEtagLocking(false);
 
                     HashMap<String, String> map = new HashMap<>();
                     map.put("one", Integer.toString(entry.getKey()));
-                    entry.getValue().setMetadata(map);
-                    entry.getValue().uploadMetadata(accessCondition, requestOptions, null);
-                    entry.getValue().downloadAttributes();
-                    String newEtag = entry.getValue().getProperties().getEtag();
+                    blockBlobClient.setMetadata(map);
+                    blockBlobClient.uploadMetadata(accessCondition, requestOptions, null);
+                    blockBlobClient.downloadAttributes();
+                    String newEtag = blockBlobClient.getProperties().getEtag();
 
                     System.out.println("METADATA UPDATED: " + entry.getKey());
 
@@ -138,6 +141,11 @@ METADATA UPDATED: 3
                     throw new RuntimeException(exception);
                 }
             });
+        var lastClient = rejectedContainer.getBlockBlobReference(blobName);
+        lastClient.downloadAttributes();
+        lastClient.getMetadata().forEach(
+            (key, value) -> System.out.println("FINISH METADATA: key=" + key + "; value=" + value)
+        );
     }
 
     /*
