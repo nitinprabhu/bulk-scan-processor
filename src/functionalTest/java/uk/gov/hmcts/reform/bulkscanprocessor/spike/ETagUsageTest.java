@@ -125,7 +125,7 @@ METADATA UPDATED: 3
                     requestOptions.setSkipEtagLocking(false);
 
                     HashMap<String, String> map = new HashMap<>();
-                    map.put("one", "two");
+                    map.put("one", Integer.toString(entry.getKey()));
                     entry.getValue().setMetadata(map);
                     entry.getValue().uploadMetadata(accessCondition, requestOptions, null);
                     entry.getValue().downloadAttributes();
