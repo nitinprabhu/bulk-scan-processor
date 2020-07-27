@@ -14,6 +14,7 @@ import uk.gov.hmcts.reform.bulkscanprocessor.controllers.BaseFunctionalTest;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.util.AbstractMap;
+import java.util.HashMap;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -62,6 +63,81 @@ class ETagUsageTest extends BaseFunctionalTest {
             var actualBlobContents = new String(blobInputStream.readAllBytes());
             assertThat(actualBlobContents).isEqualTo(blobName + "-contents");
         }
+    }
+
+    /*
+FIRST RUN:
+
+INIT: 10
+INIT: 1
+INIT: 2
+INIT: 8
+INIT: 6
+INIT: 4
+METADATA UPDATED: 4
+METADATA UPDATED: 10
+METADATA UPDATED: 8
+INIT: 5
+INIT: 9
+METADATA UPDATED: 6
+INIT: 7
+METADATA UPDATED: 1
+METADATA UPDATED: 2
+INIT: 3
+METADATA UPDATED: 9
+METADATA UPDATED: 5
+METADATA UPDATED: 7
+METADATA UPDATED: 3
+     */
+    @Test
+    void should_update_metadata() throws Exception {
+        var blobName = uploadBlobAndGetName();
+
+        var blockBlobClients = IntStream.rangeClosed(1, 10)
+            .mapToObj(i -> {
+                try {
+                    return new AbstractMap.SimpleEntry<>(i, rejectedContainer.getBlockBlobReference(blobName));
+                } catch (StorageException | URISyntaxException exception) {
+                    throw new RuntimeException(exception);
+                }
+            })
+            .collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue));
+
+        System.out.println("SIZE: " + blockBlobClients.size());
+
+        assertThat(blockBlobClients
+                       .values()
+                       .stream()
+                       .map(CloudBlockBlob::hashCode)
+                       .collect(Collectors.toSet())
+        ).hasSize(blockBlobClients.size());
+
+        blockBlobClients
+            .entrySet()
+            .parallelStream()
+            .forEach(entry -> {
+                try {
+                    System.out.println("INIT: " + entry.getKey());
+                    rejectedContainer.getBlockBlobReference(blobName);
+                    String originalETag = entry.getValue().getProperties().getEtag();
+                    var accessCondition = AccessCondition.generateIfMatchCondition(originalETag);
+                    var requestOptions = new BlobRequestOptions();
+                    requestOptions.setSkipEtagLocking(false);
+
+                    HashMap<String, String> map = new HashMap<>();
+                    map.put("one", "two");
+                    entry.getValue().setMetadata(map);
+                    entry.getValue().uploadMetadata(accessCondition, requestOptions, null);
+                    entry.getValue().downloadAttributes();
+                    String newEtag = entry.getValue().getProperties().getEtag();
+
+                    System.out.println("METADATA UPDATED: " + entry.getKey());
+
+                    assertThat(newEtag).isNotEqualTo(originalETag);
+                } catch (Exception exception) {
+                    throw new RuntimeException(exception);
+                }
+            });
     }
 
     /*
