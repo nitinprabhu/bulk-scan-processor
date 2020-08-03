@@ -55,6 +55,7 @@ class ETagUsageTest extends BaseFunctionalTest {
     void should_download_the_blob_when_etag_is_correct() throws Exception {
         var blobName = uploadBlobAndGetName();
         var blockBlobClient = rejectedContainer.getBlockBlobReference(blobName);
+        blockBlobClient.downloadAttributes();
         var accessCondition = AccessCondition.generateIfMatchCondition(blockBlobClient.getProperties().getEtag());
         var requestOptions = new BlobRequestOptions();
         requestOptions.setSkipEtagLocking(false);
@@ -293,6 +294,7 @@ DOWNLOADED: 3
                 try {
                     System.out.println("INIT: " + entry.getKey());
                     rejectedContainer.getBlockBlobReference(blobName);
+                    rejectedContainer.downloadAttributes();
                     String originalETag = entry.getValue().getProperties().getEtag();
                     var accessCondition = AccessCondition.generateIfMatchCondition(originalETag);
                     var requestOptions = new BlobRequestOptions();
@@ -377,6 +379,7 @@ but was not.
                 try {
                     System.out.println("INIT: " + entry.getKey());
                     rejectedContainer.getBlockBlobReference(blobName);
+                    rejectedContainer.downloadAttributes();
                     String originalETag = entry.getValue().getProperties().getEtag();
                     var accessCondition = AccessCondition.generateIfMatchCondition(originalETag);
                     var requestOptions = new BlobRequestOptions();
