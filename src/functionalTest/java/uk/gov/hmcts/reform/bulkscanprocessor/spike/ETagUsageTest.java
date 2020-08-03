@@ -67,27 +67,15 @@ class ETagUsageTest extends BaseFunctionalTest {
     }
 
     /*
+SIZE: 10
 INIT: 10
-INIT: 6
-INIT: 4
+INIT: 8
 INIT: 1
 INIT: 2
-INIT: 8
+INIT: 6
+INIT: 4
 METADATA UPDATED: 2
-METADATA UPDATED: 1
-METADATA UPDATED: 8
-METADATA UPDATED: 10
-METADATA UPDATED: 6
 INIT: 3
-INIT: 9
-INIT: 7
-METADATA UPDATED: 4
-INIT: 5
-METADATA UPDATED: 9
-METADATA UPDATED: 7
-METADATA UPDATED: 3
-METADATA UPDATED: 5
-FINISH METADATA: key=one; value=5
      */
     @Test
     void should_update_metadata() throws Exception {
@@ -103,17 +91,33 @@ FINISH METADATA: key=one; value=5
             })
             .collect(Collectors.toMap(
                 AbstractMap.SimpleEntry::getKey,
-                entry -> new Tuple2<>(entry.getValue(), entry.getValue().getProperties().getEtag())
+                entry -> {
+                    try {
+                        var blobClient = entry.getValue();
+                        blobClient.downloadAttributes();
+                        return new Tuple2<>(blobClient, blobClient.getProperties().getEtag());
+                    } catch (Exception exception) {
+                        throw new RuntimeException(exception);
+                    }
+                }
             ));
 
         System.out.println("SIZE: " + blockBlobClients.size());
 
+        // assert all clients are unique
         assertThat(blockBlobClients
                        .values()
                        .stream()
                        .map(tuple -> tuple._1.hashCode())
                        .collect(Collectors.toSet())
         ).hasSize(blockBlobClients.size());
+        // assert all etags are the same
+        assertThat(blockBlobClients
+                       .values()
+                       .stream()
+                       .map(Tuple2::_2)
+                       .collect(Collectors.toSet())
+        ).hasSize(1);
 
         blockBlobClients
             .entrySet()
