@@ -67,15 +67,18 @@ class ETagUsageTest extends BaseFunctionalTest {
     }
 
     /*
-SIZE: 10
 INIT: 10
-INIT: 8
-INIT: 1
 INIT: 2
+INIT: 1
 INIT: 6
 INIT: 4
-METADATA UPDATED: 2
+INIT: 8
+METADATA UPDATED: 4
+INIT: 5
 INIT: 3
+INIT: 7
+INIT: 9
+FINISH METADATA: key=one; value=4
      */
     @Test
     void should_update_metadata() throws Exception {
@@ -141,6 +144,9 @@ INIT: 3
                     System.out.println("METADATA UPDATED: " + entry.getKey());
 
                     assertThat(newEtag).isNotEqualTo(originalETag);
+                } catch (StorageException exception) {
+                    assertThat(exception.getErrorCode()).isEqualTo("ConditionNotMet");
+                    assertThat(exception.getHttpStatusCode()).isEqualTo(HttpStatus.PRECONDITION_FAILED.value());
                 } catch (Exception exception) {
                     throw new RuntimeException(exception);
                 }
@@ -154,13 +160,20 @@ INIT: 3
 
 /*
 SIZE: 10
-INIT: 1
-INIT: 6
 INIT: 8
-INIT: 10
+INIT: 1
 INIT: 2
 INIT: 4
-METADATA UPDATED: 8
+INIT: 6
+INIT: 10
+INIT: 9
+METADATA UPDATED: 1
+INIT: 7
+INIT: 3
+METADATA UPDATED: 4
+INIT: 5
+METADATA UPDATED: 3
+FINISH METADATA: key=one; value=3
  */
     @Test
     void should_update_metadata_v2() throws Exception {
@@ -212,6 +225,9 @@ METADATA UPDATED: 8
                     System.out.println("METADATA UPDATED: " + entry.getKey());
 
                     assertThat(newEtag).isNotEqualTo(originalETag);
+                } catch (StorageException exception) {
+                    assertThat(exception.getErrorCode()).isEqualTo("ConditionNotMet");
+                    assertThat(exception.getHttpStatusCode()).isEqualTo(HttpStatus.PRECONDITION_FAILED.value());
                 } catch (Exception exception) {
                     throw new RuntimeException(exception);
                 }
