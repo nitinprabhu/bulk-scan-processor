@@ -152,6 +152,77 @@ INIT: 3
         );
     }
 
+/*
+SIZE: 10
+INIT: 1
+INIT: 6
+INIT: 8
+INIT: 10
+INIT: 2
+INIT: 4
+METADATA UPDATED: 8
+ */
+    @Test
+    void should_update_metadata_v2() throws Exception {
+        var blobName = uploadBlobAndGetName();
+
+        var blockBlobClients = IntStream.rangeClosed(1, 10)
+            .mapToObj(i -> {
+                try {
+                    return new AbstractMap.SimpleEntry<>(i, rejectedContainer.getBlockBlobReference(blobName));
+                } catch (StorageException | URISyntaxException exception) {
+                    throw new RuntimeException(exception);
+                }
+            })
+            .collect(Collectors.toMap(
+                AbstractMap.SimpleEntry::getKey,
+                AbstractMap.SimpleEntry::getValue
+            ));
+
+        System.out.println("SIZE: " + blockBlobClients.size());
+
+        // assert all clients are unique
+        assertThat(blockBlobClients
+                       .values()
+                       .stream()
+                       .map(CloudBlockBlob::hashCode)
+                       .collect(Collectors.toSet())
+        ).hasSize(blockBlobClients.size());
+
+        blockBlobClients
+            .entrySet()
+            .parallelStream()
+            .forEach(entry -> {
+                try {
+                    System.out.println("INIT: " + entry.getKey());
+                    CloudBlockBlob blockBlobClient = entry.getValue();
+                    blockBlobClient.downloadAttributes();
+                    String originalETag = blockBlobClient.getProperties().getEtag();
+                    var accessCondition = AccessCondition.generateIfMatchCondition(originalETag);
+                    var requestOptions = new BlobRequestOptions();
+                    requestOptions.setSkipEtagLocking(false);
+
+                    HashMap<String, String> map = new HashMap<>();
+                    map.put("one", Integer.toString(entry.getKey()));
+                    blockBlobClient.setMetadata(map);
+                    blockBlobClient.uploadMetadata(accessCondition, requestOptions, null);
+                    blockBlobClient.downloadAttributes();
+                    String newEtag = blockBlobClient.getProperties().getEtag();
+
+                    System.out.println("METADATA UPDATED: " + entry.getKey());
+
+                    assertThat(newEtag).isNotEqualTo(originalETag);
+                } catch (Exception exception) {
+                    throw new RuntimeException(exception);
+                }
+            });
+        var lastClient = rejectedContainer.getBlockBlobReference(blobName);
+        lastClient.downloadAttributes();
+        lastClient.getMetadata().forEach(
+            (key, value) -> System.out.println("FINISH METADATA: key=" + key + "; value=" + value)
+        );
+    }
+
     /*
     FIRST RUN:
 SIZE: 10
