@@ -4,10 +4,12 @@ import io.vavr.control.Try;
 import joptsimple.internal.Strings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.data.util.Optionals;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException.NotFound;
+import org.springframework.web.client.HttpServerErrorException;
 import uk.gov.hmcts.reform.authorisation.generators.AuthTokenGenerator;
 import uk.gov.hmcts.reform.bulkscanprocessor.config.ContainerMappings;
 import uk.gov.hmcts.reform.bulkscanprocessor.exceptions.OcrValidationException;
@@ -40,17 +42,21 @@ public class OcrValidator {
     private final ContainerMappings containerMappings;
     private final AuthTokenGenerator authTokenGenerator;
 
+    private final int retryCount;
+
     //region constructor
     public OcrValidator(
         OcrValidationClient client,
         OcrPresenceValidator presenceValidator,
         ContainerMappings containerMappings,
-        AuthTokenGenerator authTokenGenerator
+        AuthTokenGenerator authTokenGenerator,
+        @Value("${ocr-validation.retry-count:1}") int retryCount
     ) {
         this.client = client;
         this.presenceValidator = presenceValidator;
         this.containerMappings = containerMappings;
         this.authTokenGenerator = authTokenGenerator;
+        this.retryCount = retryCount;
     }
     //endregion
 
@@ -71,12 +77,7 @@ public class OcrValidator {
             findValidationUrl(envelope.poBox),
             (docWithOcr, validationUrl) ->
                 Try
-                    .of(() -> client.validate(
-                        validationUrl,
-                        toFormData(docWithOcr),
-                        getFormType(docWithOcr),
-                        authTokenGenerator.generate()
-                    ))
+                    .of(() -> doValidate(docWithOcr, validationUrl, envelope.zipFileName, retryCount))
                     .onSuccess(res -> handleValidationResponse(res, envelope, docWithOcr))
                     .onFailure(exc -> handleRestClientException(exc, validationUrl, envelope, docWithOcr))
                     .map(response -> ocrValidationWarnings(docWithOcr, response.warnings))
@@ -87,6 +88,35 @@ public class OcrValidator {
                         )
                     )
         );
+    }
+
+    private ValidationResponse doValidate(
+            InputScannableItem docWithOcr,
+            String validationUrl,
+            String zipFileName,
+            int retryCount
+    ) {
+        try {
+            return client.validate(
+                    validationUrl,
+                    toFormData(docWithOcr),
+                    getFormType(docWithOcr),
+                    authTokenGenerator.generate()
+            );
+        } catch (HttpServerErrorException ex) {
+            if (retryCount > 0) {
+                log.error(
+                        "Error sending OCR data validation response, "
+                                + "envelope: {}. Remaining Retry Count: {}, Retrying...",
+                        zipFileName,
+                        retryCount,
+                        ex
+                );
+                return doValidate(docWithOcr, validationUrl, zipFileName, --retryCount);
+            } else {
+                throw ex;
+            }
+        }
     }
 
     private OcrValidationWarnings ocrValidationWarnings(InputScannableItem scannableItem, List<String> warnings) {

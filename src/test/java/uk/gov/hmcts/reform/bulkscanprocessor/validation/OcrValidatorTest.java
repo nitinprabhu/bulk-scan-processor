@@ -11,7 +11,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.web.client.HttpClientErrorException.BadRequest;
 import org.springframework.web.client.HttpClientErrorException.NotFound;
+import org.springframework.web.client.HttpServerErrorException.ServiceUnavailable;
 import uk.gov.hmcts.reform.authorisation.generators.AuthTokenGenerator;
 import uk.gov.hmcts.reform.bulkscanprocessor.config.ContainerMappings;
 import uk.gov.hmcts.reform.bulkscanprocessor.config.ContainerMappings.Mapping;
@@ -45,6 +47,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static uk.gov.hmcts.reform.bulkscanprocessor.helper.InputEnvelopeCreator.inputEnvelope;
@@ -75,9 +78,17 @@ public class OcrValidatorTest {
 
     private OcrValidator ocrValidator;
 
+    private static final int RETRY_COUNT = 2;
+
     @BeforeEach
-    public void setUp() throws Exception {
-        this.ocrValidator = new OcrValidator(client, presenceValidator, containerMappings, authTokenGenerator);
+    public void setUp() {
+        this.ocrValidator = new OcrValidator(
+                client,
+                presenceValidator,
+                containerMappings,
+                authTokenGenerator,
+                RETRY_COUNT
+        );
     }
 
     @Test
@@ -398,7 +409,7 @@ public class OcrValidatorTest {
     }
 
     @Test
-    public void should_continue_if_calling_validation_endpoint_fails() {
+    public void should_retry_if_calling_validation_endpoint_fails_1_time() {
         // given
         InputScannableItem scannableItemWithOcr = doc(FORM, "form", sampleOcr());
         InputEnvelope envelope = envelope(
@@ -418,7 +429,153 @@ public class OcrValidatorTest {
                 new Mapping("c", "j", envelope.poBox, VALIDATION_URL, true, true)
             ));
 
-        given(client.validate(any(), any(), any(), any())).willThrow(new RuntimeException());
+        given(client.validate(any(), any(), any(), any()))
+                .willThrow(ServiceUnavailable.class)
+                .willReturn(new ValidationResponse(Status.SUCCESS, emptyList(), emptyList()));
+
+        given(authTokenGenerator.generate()).willReturn(S2S_TOKEN);
+
+        // when
+        Optional<OcrValidationWarnings> warnings = ocrValidator.assertOcrDataIsValid(envelope);
+
+        // then
+        assertThat(warnings).isPresent();
+        assertThat(warnings.get().documentControlNumber).isEqualTo(scannableItemWithOcr.documentControlNumber);
+        assertThat(warnings.get().warnings).isEmpty();
+        verify(client, times(2)).validate(any(), any(), any(), any());
+    }
+
+    @Test
+    public void should_retry_if_calling_validation_endpoint_fails_2_times() {
+        // given
+        InputScannableItem scannableItemWithOcr = doc(FORM, "form", sampleOcr());
+        InputEnvelope envelope = envelope(
+            PO_BOX,
+            asList(
+                scannableItemWithOcr,
+                doc(OTHER, "other", null)
+            ),
+            SUPPLEMENTARY_EVIDENCE
+        );
+
+        given(presenceValidator.assertHasProperlySetOcr(envelope.scannableItems))
+            .willReturn(Optional.of(scannableItemWithOcr));
+
+        given(containerMappings.getMappings())
+            .willReturn(singletonList(
+                new Mapping("c", "j", envelope.poBox, VALIDATION_URL, true, true)
+            ));
+
+        given(client.validate(any(), any(), any(), any()))
+                .willThrow(ServiceUnavailable.class)
+                .willThrow(ServiceUnavailable.class)
+                .willReturn(new ValidationResponse(Status.SUCCESS, emptyList(), emptyList()));
+
+        given(authTokenGenerator.generate()).willReturn(S2S_TOKEN);
+
+        // when
+        Optional<OcrValidationWarnings> warnings = ocrValidator.assertOcrDataIsValid(envelope);
+
+        // then
+        assertThat(warnings).isPresent();
+        assertThat(warnings.get().documentControlNumber).isEqualTo(scannableItemWithOcr.documentControlNumber);
+        assertThat(warnings.get().warnings).isEmpty();
+        verify(client, times(3)).validate(any(), any(), any(), any());
+    }
+
+    @Test
+    public void should_continue_if_calling_validation_endpoint_fails_3_times() {
+        // given
+        InputScannableItem scannableItemWithOcr = doc(FORM, "form", sampleOcr());
+        InputEnvelope envelope = envelope(
+                PO_BOX,
+                asList(
+                        scannableItemWithOcr,
+                        doc(OTHER, "other", null)
+                ),
+                SUPPLEMENTARY_EVIDENCE
+        );
+
+        given(presenceValidator.assertHasProperlySetOcr(envelope.scannableItems))
+                .willReturn(Optional.of(scannableItemWithOcr));
+
+        given(containerMappings.getMappings())
+                .willReturn(singletonList(
+                        new Mapping("c", "j", envelope.poBox, VALIDATION_URL, true, true)
+                ));
+
+        given(client.validate(any(), any(), any(), any()))
+                .willThrow(ServiceUnavailable.class);
+
+        given(authTokenGenerator.generate()).willReturn(S2S_TOKEN);
+
+        // when
+        Optional<OcrValidationWarnings> warnings = ocrValidator.assertOcrDataIsValid(envelope);
+
+        // then
+        assertThat(warnings).isPresent();
+        assertThat(warnings.get().documentControlNumber).isEqualTo(scannableItemWithOcr.documentControlNumber);
+        assertThat(warnings.get().warnings).containsExactly("OCR validation was not performed due to errors");
+        verify(client, times(RETRY_COUNT + 1)).validate(any(), any(), any(), any());
+    }
+
+    @Test
+    public void should_continue_without_retry_if_calling_validation_endpoint_fails_not_with_generic_exception() {
+        // given
+        InputScannableItem scannableItemWithOcr = doc(FORM, "form", sampleOcr());
+        InputEnvelope envelope = envelope(
+                PO_BOX,
+                asList(
+                        scannableItemWithOcr,
+                        doc(OTHER, "other", null)
+                ),
+                SUPPLEMENTARY_EVIDENCE
+        );
+
+        given(presenceValidator.assertHasProperlySetOcr(envelope.scannableItems))
+                .willReturn(Optional.of(scannableItemWithOcr));
+
+        given(containerMappings.getMappings())
+                .willReturn(singletonList(
+                        new Mapping("c", "j", envelope.poBox, VALIDATION_URL, true, true)
+                ));
+
+        given(client.validate(any(), any(), any(), any())).willThrow(RuntimeException.class);
+
+        given(authTokenGenerator.generate()).willReturn(S2S_TOKEN);
+
+        // when
+        Optional<OcrValidationWarnings> warnings = ocrValidator.assertOcrDataIsValid(envelope);
+
+        // then
+        assertThat(warnings).isPresent();
+        assertThat(warnings.get().documentControlNumber).isEqualTo(scannableItemWithOcr.documentControlNumber);
+        assertThat(warnings.get().warnings).containsExactly("OCR validation was not performed due to errors");
+        verify(client).validate(any(), any(), any(), any());
+    }
+
+    @Test
+    public void should_continue_without_retry_if_calling_validation_endpoint_fails_not_with_client_exception() {
+        // given
+        InputScannableItem scannableItemWithOcr = doc(FORM, "form", sampleOcr());
+        InputEnvelope envelope = envelope(
+                PO_BOX,
+                asList(
+                        scannableItemWithOcr,
+                        doc(OTHER, "other", null)
+                ),
+                SUPPLEMENTARY_EVIDENCE
+        );
+
+        given(presenceValidator.assertHasProperlySetOcr(envelope.scannableItems))
+                .willReturn(Optional.of(scannableItemWithOcr));
+
+        given(containerMappings.getMappings())
+                .willReturn(singletonList(
+                        new Mapping("c", "j", envelope.poBox, VALIDATION_URL, true, true)
+                ));
+
+        given(client.validate(any(), any(), any(), any())).willThrow(BadRequest.class);
 
         given(authTokenGenerator.generate()).willReturn(S2S_TOKEN);
 
