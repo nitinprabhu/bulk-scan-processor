@@ -50,7 +50,7 @@ public class OcrValidator {
         OcrPresenceValidator presenceValidator,
         ContainerMappings containerMappings,
         AuthTokenGenerator authTokenGenerator,
-        @Value("${ocr-validation.retry-count:1}") int retryCount
+        @Value("${ocr-validation.retry-count}") int retryCount
     ) {
         this.client = client;
         this.presenceValidator = presenceValidator;
